@@ -1,0 +1,128 @@
+# databricks.yml
+
+# This is the main configuration file for your Databricks Asset Bundle.
+# It defines your project, resources (jobs, pipelines), and deployment targets.
+
+bundle:
+  # Name of your bundle (should be unique in your workspace/organization)
+  name: ecommerce-sales-etl-bundle
+
+# Defines deployment targets (e.g., 'dev', 'prod').
+# You can have different configurations for each target.
+targets:
+  # Development environment configuration
+  dev:
+    # Set to 'development' mode for easier iteration (e.g., jobs prefixed with [dev] and paused triggers)
+    mode: development
+    # Host URL of your Databricks workspace (e.g., "https://dbc-xxxx.cloud.databricks.com")
+    # !!! IMPORTANT: REPLACE THIS WITH YOUR ACTUAL DATABRICKS WORKSPACE URL !!!
+    workspace:
+      host: https://<your-databricks-workspace-url>
+
+    # Variables specific to the 'dev' environment
+    # These can be referenced in your job definitions using `${var.env_var_name}`
+    variables:
+      # Base path in DBFS for this environment's data and checkpoints
+      project_base_path: /FileStore/ecommerce_sales_project_dev
+      # Cluster configuration for dev environment (adjust as needed for performance/cost)
+      cluster_node_type_id: Standard_DS3_v2 # Example: change to a suitable node type
+      cluster_num_workers: 2               # Example: 2 worker nodes for dev
+
+  # Production environment configuration (optional, but good for demonstrating best practices)
+  # You might deploy to a different workspace host for production.
+  # Ensure your CI/CD setup handles distinct credentials for prod.
+  prod:
+    mode: production
+    workspace:
+      host: https://<your-databricks-workspace-url> # Often same as dev for initial setup, but could be different workspace
+    variables:
+      project_base_path: /FileStore/ecommerce_sales_project_prod
+      cluster_node_type_id: Standard_DS5_v2 # Stronger cluster for prod
+      cluster_num_workers: 5
+
+# Define the resources to be deployed by this bundle.
+# This section typically contains job definitions, DLT pipelines, etc.
+resources:
+  jobs:
+    # Define a single Databricks Job named 'ecommerce_sales_etl_job'
+    ecommerce_sales_etl_job:
+      # Job name as it appears in the Databricks UI.
+      # ${bundle.target} automatically inserts 'dev' or 'prod' based on deployment.
+      name: ${bundle.target} - Ecommerce Sales ETL Pipeline
+
+      # Define the job's tasks and their dependencies
+      tasks:
+        # Task 1: Setup and Data Generation
+        - task_key: setup_data
+          notebook_task:
+            notebook_path: ./notebooks/00_Setup_and_Data_Generation.py
+          # Define a new cluster for this job run.
+          # Subsequent tasks in this job will reuse this cluster.
+          new_cluster:
+            spark_version: 13.3.x-scala2.12 # Choose a suitable Spark version available in your workspace
+            node_type_id: ${var.cluster_node_type_id} # Uses variable from target
+            num_workers: ${var.cluster_num_workers}   # Uses variable from target
+            # Pass the project_base_path as an environment variable to the Spark cluster
+            spark_env_vars:
+              PROJECT_BASE_PATH: ${var.project_base_path}
+          timeout_seconds: 3600 # Max 1 hour for setup
+          max_retries: 0 # Setup should ideally not need retries; fail fast if it can't set up.
+
+        # Task 2: Bronze Layer Processing
+        - task_key: bronze_layer
+          depends_on: [setup_data] # This task runs only after 'setup_data' completes successfully
+          notebook_task:
+            notebook_path: ./notebooks/01_Bronze_Layer.py
+          existing_cluster_id: # Uses the cluster created by the previous task
+          timeout_seconds: 3600
+          max_retries: 1 # Allow one retry for streaming tasks due to transient issues
+
+        # Task 3: Silver Layer Processing
+        - task_key: silver_layer
+          depends_on: [bronze_layer] # Runs after 'bronze_layer'
+          notebook_task:
+            notebook_path: ./notebooks/02_Silver_Layer.py
+          existing_cluster_id: # Uses the cluster created by the previous task
+          timeout_seconds: 3600
+          max_retries: 1
+
+        # Task 4: Gold Layer Processing
+        - task_key: gold_layer
+          depends_on: [silver_layer] # Runs after 'silver_layer'
+          notebook_task:
+            notebook_path: ./notebooks/03_Gold_Layer.py
+          existing_cluster_id: # Uses the cluster created by the previous task
+          timeout_seconds: 3600
+          max_retries: 1
+
+        # Task 5: Query and Cleanup
+        # IMPORTANT: This task stops the streaming jobs and cleans up the environment.
+        # Ensure it always runs to avoid orphaned streams/data, even if prior tasks fail.
+        # You could consider `run_if: ALWAYS` if you want cleanup regardless of upstream success/failure.
+        - task_key: query_and_cleanup
+          depends_on: [gold_layer] # Runs after 'gold_layer'
+          notebook_task:
+            notebook_path: ./notebooks/04_Query_and_Cleanup.py
+          existing_cluster_id: # Uses the cluster created by the previous task
+          timeout_seconds: 3600
+          max_retries: 0 # Cleanup should be robust and not require retries
+
+      # Optional: Job-level settings
+      # The schedule is paused by default in 'development' mode but active in 'production' mode.
+      schedule:
+        # Define a cron schedule for the job (e.g., daily at 00:00 UTC)
+        quartz_cron_expression: "0 0 0 * * ?" # Every day at midnight UTC
+        timezone_id: UTC
+      
+      # Optional: Email notifications for job success/failure
+      email_notifications:
+        on_failure:
+          - your_email@example.com # !!! IMPORTANT: REPLACE THIS WITH YOUR EMAIL !!!
+      
+      # Optional: Permissions (highly recommended for production deployments)
+      # You can define who has what access level to this deployed job.
+      # access_control_list:
+      #   - user_name: your_databricks_user@example.com # Your user email
+      #     permission_level: CAN_MANAGE
+      #   - group_name: data-engineers # Example: A group in your Databricks workspace
+      #     permission_level: CAN_RUN
