@@ -10,18 +10,6 @@ The entire workflow is defined and deployed using **Databricks Asset Bundles (DA
 
 -----
 
-## Architecture
-
-The pipeline adheres to the **Medallion Architecture** pattern, ensuring data quality and transformation in distinct stages:
-
-```mermaid
-graph TD
-    A[Raw Sales Data (CSV files in Cloud Storage)] -->|Auto Loader (Incremental Ingest)| B(Bronze Layer: `bronze_sales_table` - Raw Delta Table)
-    B -->|Stream Processing (PySpark)| C(Silver Layer: `silver_sales_table` - Cleaned & Standardized Delta Table)
-    C -->|Stream Processing (PySpark Aggregations)| D(Gold Layer: `gold_sales_summary_table` - Aggregated Delta Table)
-    D --> E[Business Intelligence / Analytics Tools]
-```
-
 **Key components and data flow:**
 
   * **Raw Sales Data:** Simulated CSV files land in a cloud storage directory (`/FileStore/ecommerce_sales_project_<env>/raw_sales_data`). The `00_Setup_and_Data_Generation.py` notebook programmatically creates these files.
